@@ -26,7 +26,8 @@ else:
     df = pd.DataFrame(scores)
     # Calculate accuracy percentage
     df['accuracy'] = (df['score'] / df['total']) * 100
-    df['completed_at'] = pd.to_datetime(df['completed_at'])
+    # Strip " IST" before converting to datetime to prevent pandas ValueError
+    df['completed_at'] = pd.to_datetime(df['completed_at'].str.replace(" IST", ""))
     df['date'] = df['completed_at'].dt.date
 
     # Row 1: Overall Stats
