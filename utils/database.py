@@ -12,9 +12,26 @@ load_dotenv()
 # Use Streamlit caching to keep the pool alive across page reloads!
 @st.cache_resource
 def get_connection_pool():
-    DATABASE_URL = os.getenv("DATABASE_URL")
-    # Creates a pool of connections so we don't have to reconnect every time
-    return pool.ThreadedConnectionPool(1, 10, DATABASE_URL, sslmode='require')
+    try:
+        # Try to get from environment first
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        
+        # Fallback to Streamlit secrets for Cloud deployment
+        if not DATABASE_URL:
+            try:
+                DATABASE_URL = st.secrets["DATABASE_URL"]
+            except FileNotFoundError:
+                pass # Secrets file missing
+
+        if not DATABASE_URL:
+            st.error("DATABASE_URL is completely missing! Check your Streamlit Secrets.")
+            st.stop()
+
+        # Creates a pool of connections so we don't have to reconnect every time
+        return pool.ThreadedConnectionPool(1, 10, DATABASE_URL, sslmode='require')
+    except Exception as e:
+        st.error(f"FATAL DATABASE ERROR: {str(e)}")
+        st.stop()
 
 def get_connection():
     return get_connection_pool().getconn()
