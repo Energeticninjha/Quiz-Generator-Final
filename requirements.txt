@@ -8,3 +8,4 @@ pandas
 python-dotenv
 pytz
 plotly
+psycopg2-binary
