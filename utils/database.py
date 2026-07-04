@@ -1,17 +1,29 @@
 import psycopg2
+from psycopg2 import pool
 import json
 import os
 from datetime import datetime
 import pytz
 from dotenv import load_dotenv
+import streamlit as st
 
 load_dotenv()
 
-def get_connection():
-    # Use the connection string from .env
-    # We require SSL for Supabase connections
+# Use Streamlit caching to keep the pool alive across page reloads!
+@st.cache_resource
+def get_connection_pool():
     DATABASE_URL = os.getenv("DATABASE_URL")
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
+    # Creates a pool of connections so we don't have to reconnect every time
+    return pool.ThreadedConnectionPool(1, 10, DATABASE_URL, sslmode='require')
+
+def get_connection():
+    return get_connection_pool().getconn()
+
+def release_connection(conn):
+    try:
+        get_connection_pool().putconn(conn)
+    except Exception:
+        pass
 
 def format_ist(utc_datetime):
     """Convert UTC datetime object or string to IST."""
@@ -20,7 +32,6 @@ def format_ist(utc_datetime):
             utc_dt = datetime.strptime(utc_datetime, "%Y-%m-%d %H:%M:%S")
             utc_dt = pytz.utc.localize(utc_dt)
         else:
-            # If it's already a datetime object (PostgreSQL returns datetime)
             if utc_datetime.tzinfo is None:
                 utc_dt = pytz.utc.localize(utc_datetime)
             else:
@@ -90,7 +101,8 @@ def init_db():
     ''')
     
     conn.commit()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
 
 # --- User Functions ---
 
@@ -110,14 +122,16 @@ def create_user(username, email, hashed_password):
         conn.rollback()
         return None
     finally:
-        conn.close()
+        cursor.close()
+        release_connection(conn)
 
 def get_user_by_username(username):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id, username, email, hashed_password, created_at FROM users WHERE username = %s', (username,))
     row = cursor.fetchone()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
     if row:
         return {'id': row[0], 'username': row[1], 'email': row[2], 'hashed_password': row[3], 'created_at': row[4]}
     return None
@@ -134,7 +148,8 @@ def create_category(user_id, name):
     ''', (user_id, name))
     cat_id = cursor.fetchone()[0]
     conn.commit()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
     return cat_id
 
 def get_user_categories(user_id):
@@ -142,7 +157,8 @@ def get_user_categories(user_id):
     cursor = conn.cursor()
     cursor.execute('SELECT id, name FROM categories WHERE user_id = %s ORDER BY name ASC', (user_id,))
     rows = cursor.fetchall()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
     return [{'id': r[0], 'name': r[1]} for r in rows]
 
 # --- Quiz Functions ---
@@ -157,7 +173,8 @@ def save_quiz(topic, num_q, difficulty, quiz_data, user_id, category_id=None):
     ''', (topic, num_q, difficulty, json.dumps(quiz_data), user_id, category_id))
     quiz_id = cursor.fetchone()[0]
     conn.commit()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
     return quiz_id
 
 def get_all_quizzes(user_id):
@@ -171,6 +188,8 @@ def get_all_quizzes(user_id):
         ORDER BY q.created_at DESC
     ''', (user_id,))
     rows = cursor.fetchall()
+    cursor.close()
+    release_connection(conn)
     quizzes = []
     for row in rows:
         quizzes.append({
@@ -182,7 +201,6 @@ def get_all_quizzes(user_id):
             'quiz_data': json.loads(row[5]),
             'category_name': row[6] if row[6] else "Uncategorized"
         })
-    conn.close()
     return quizzes
 
 def get_recent_quizzes(user_id, limit=5):
@@ -196,6 +214,8 @@ def get_recent_quizzes(user_id, limit=5):
         ORDER BY q.created_at DESC LIMIT %s
     ''', (user_id, limit))
     rows = cursor.fetchall()
+    cursor.close()
+    release_connection(conn)
     quizzes = []
     for row in rows:
         quizzes.append({
@@ -206,7 +226,6 @@ def get_recent_quizzes(user_id, limit=5):
             'created_at': format_ist(row[4]),
             'category_name': row[5] if row[5] else "Uncategorized"
         })
-    conn.close()
     return quizzes
 
 # --- Score Functions ---
@@ -219,13 +238,16 @@ def save_score(quiz_id, score, total, user_id, weak_topics, strong_topics):
         VALUES (%s, %s, %s, %s, %s, %s)
     ''', (quiz_id, score, total, user_id, json.dumps(weak_topics), json.dumps(strong_topics)))
     conn.commit()
-    conn.close()
+    cursor.close()
+    release_connection(conn)
 
 def get_scores_for_quiz(quiz_id, user_id):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT score, total, completed_at, weak_topics, strong_topics FROM scores WHERE quiz_id = %s AND user_id = %s ORDER BY completed_at DESC', (quiz_id, user_id))
     rows = cursor.fetchall()
+    cursor.close()
+    release_connection(conn)
     scores = []
     for row in rows:
         scores.append({
@@ -235,7 +257,6 @@ def get_scores_for_quiz(quiz_id, user_id):
             'weak_topics': json.loads(row[3]) if row[3] else [],
             'strong_topics': json.loads(row[4]) if row[4] else []
         })
-    conn.close()
     return scores
 
 def get_all_scores_for_user(user_id):
@@ -249,6 +270,8 @@ def get_all_scores_for_user(user_id):
         ORDER BY s.completed_at ASC
     ''', (user_id,))
     rows = cursor.fetchall()
+    cursor.close()
+    release_connection(conn)
     scores = []
     for row in rows:
         scores.append({
@@ -260,5 +283,4 @@ def get_all_scores_for_user(user_id):
             'weak_topics': json.loads(row[5]) if row[5] else [],
             'strong_topics': json.loads(row[6]) if row[6] else []
         })
-    conn.close()
     return scores
