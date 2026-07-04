@@ -1,0 +1,271 @@
+import sqlite3
+import json
+import os
+from datetime import datetime
+import pytz
+
+DB_PATH = 'quiz_data.db'
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
+def format_ist(utc_str):
+    """Convert UTC timestamp string to IST."""
+    try:
+        utc_dt = datetime.strptime(utc_str, "%Y-%m-%d %H:%M:%S")
+        utc_dt = pytz.utc.localize(utc_dt)
+        ist_dt = utc_dt.astimezone(pytz.timezone('Asia/Kolkata'))
+        return ist_dt.strftime("%Y-%m-%d %I:%M %p IST")
+    except Exception:
+        return utc_str
+
+def init_db():
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Create users table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            email TEXT UNIQUE,
+            hashed_password TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Create categories table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    ''')
+    
+    # Create quizzes table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS quizzes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic TEXT,
+            num_q INTEGER,
+            difficulty TEXT,
+            quiz_data TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            category_id INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id),
+            FOREIGN KEY(category_id) REFERENCES categories(id)
+        )
+    ''')
+    
+    # Create scores table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            quiz_id INTEGER,
+            score INTEGER,
+            total INTEGER,
+            completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER,
+            weak_topics TEXT,
+            strong_topics TEXT,
+            FOREIGN KEY(quiz_id) REFERENCES quizzes(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    ''')
+    
+    # Migration for existing tables (if columns are missing)
+    try:
+        cursor.execute("PRAGMA table_info(quizzes)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'user_id' not in columns:
+            cursor.execute("ALTER TABLE quizzes ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        if 'category_id' not in columns:
+            cursor.execute("ALTER TABLE quizzes ADD COLUMN category_id INTEGER REFERENCES categories(id)")
+    except Exception as e:
+        print(f"Migration error for quizzes: {e}")
+        
+    try:
+        cursor.execute("PRAGMA table_info(scores)")
+        columns = [info[1] for info in cursor.fetchall()]
+        if 'user_id' not in columns:
+            cursor.execute("ALTER TABLE scores ADD COLUMN user_id INTEGER REFERENCES users(id)")
+        if 'weak_topics' not in columns:
+            cursor.execute("ALTER TABLE scores ADD COLUMN weak_topics TEXT")
+        if 'strong_topics' not in columns:
+            cursor.execute("ALTER TABLE scores ADD COLUMN strong_topics TEXT")
+    except Exception as e:
+        print(f"Migration error for scores: {e}")
+    
+    conn.commit()
+    conn.close()
+
+# --- User Functions ---
+
+def create_user(username, email, hashed_password):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO users (username, email, hashed_password)
+            VALUES (?, ?, ?)
+        ''', (username, email, hashed_password))
+        user_id = cursor.lastrowid
+        conn.commit()
+        return user_id
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+def get_user_by_username(username):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, username, email, hashed_password, created_at FROM users WHERE username = ?', (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {'id': row[0], 'username': row[1], 'email': row[2], 'hashed_password': row[3], 'created_at': row[4]}
+    return None
+
+# --- Category Functions ---
+
+def create_category(user_id, name):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO categories (user_id, name)
+        VALUES (?, ?)
+    ''', (user_id, name))
+    cat_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return cat_id
+
+def get_user_categories(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, name FROM categories WHERE user_id = ? ORDER BY name ASC', (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{'id': r[0], 'name': r[1]} for r in rows]
+
+# --- Quiz Functions ---
+
+def save_quiz(topic, num_q, difficulty, quiz_data, user_id, category_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO quizzes (topic, num_q, difficulty, quiz_data, user_id, category_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (topic, num_q, difficulty, json.dumps(quiz_data), user_id, category_id))
+    quiz_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return quiz_id
+
+def get_all_quizzes(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT q.id, q.topic, q.num_q, q.difficulty, q.created_at, q.quiz_data, c.name 
+        FROM quizzes q
+        LEFT JOIN categories c ON q.category_id = c.id
+        WHERE q.user_id = ? 
+        ORDER BY q.created_at DESC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    quizzes = []
+    for row in rows:
+        quizzes.append({
+            'id': row[0],
+            'topic': row[1],
+            'num_q': row[2],
+            'difficulty': row[3],
+            'created_at': format_ist(row[4]),
+            'quiz_data': json.loads(row[5]),
+            'category_name': row[6] if row[6] else "Uncategorized"
+        })
+    conn.close()
+    return quizzes
+
+def get_recent_quizzes(user_id, limit=5):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT q.id, q.topic, q.num_q, q.difficulty, q.created_at, c.name 
+        FROM quizzes q
+        LEFT JOIN categories c ON q.category_id = c.id
+        WHERE q.user_id = ? 
+        ORDER BY q.created_at DESC LIMIT ?
+    ''', (user_id, limit))
+    rows = cursor.fetchall()
+    quizzes = []
+    for row in rows:
+        quizzes.append({
+            'id': row[0],
+            'topic': row[1],
+            'num_q': row[2],
+            'difficulty': row[3],
+            'created_at': format_ist(row[4]),
+            'category_name': row[5] if row[5] else "Uncategorized"
+        })
+    conn.close()
+    return quizzes
+
+# --- Score Functions ---
+
+def save_score(quiz_id, score, total, user_id, weak_topics, strong_topics):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO scores (quiz_id, score, total, user_id, weak_topics, strong_topics)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (quiz_id, score, total, user_id, json.dumps(weak_topics), json.dumps(strong_topics)))
+    conn.commit()
+    conn.close()
+
+def get_scores_for_quiz(quiz_id, user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT score, total, completed_at, weak_topics, strong_topics FROM scores WHERE quiz_id = ? AND user_id = ? ORDER BY completed_at DESC', (quiz_id, user_id))
+    rows = cursor.fetchall()
+    scores = []
+    for row in rows:
+        scores.append({
+            'score': row[0],
+            'total': row[1],
+            'completed_at': format_ist(row[2]),
+            'weak_topics': json.loads(row[3]) if row[3] else [],
+            'strong_topics': json.loads(row[4]) if row[4] else []
+        })
+    conn.close()
+    return scores
+
+def get_all_scores_for_user(user_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT s.score, s.total, s.completed_at, q.topic, q.difficulty, s.weak_topics, s.strong_topics 
+        FROM scores s
+        JOIN quizzes q ON s.quiz_id = q.id
+        WHERE s.user_id = ? 
+        ORDER BY s.completed_at ASC
+    ''', (user_id,))
+    rows = cursor.fetchall()
+    scores = []
+    for row in rows:
+        scores.append({
+            'score': row[0],
+            'total': row[1],
+            'completed_at': format_ist(row[2]),
+            'topic': row[3],
+            'difficulty': row[4],
+            'weak_topics': json.loads(row[5]) if row[5] else [],
+            'strong_topics': json.loads(row[6]) if row[6] else []
+        })
+    conn.close()
+    return scores

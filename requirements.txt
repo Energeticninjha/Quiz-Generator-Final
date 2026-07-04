@@ -2,3 +2,9 @@ streamlit
 PyMuPDF
 python-docx
 google-generativeai
+bcrypt
+streamlit-option-menu
+pandas
+python-dotenv
+pytz
+plotly
