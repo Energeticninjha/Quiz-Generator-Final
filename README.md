@@ -1,6 +1,10 @@
 # 📚 Intelligent Quiz Generator
 
-An AI-powered quiz generation tool built with **Python**, **Streamlit**, and the **Google Gemini API**. 
+[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://quiz-generator-final-ogezczftmyptmugtda93gf.streamlit.app/)
+
+**Live Demo:** [https://quiz-generator-final-ogezczftmyptmugtda93gf.streamlit.app/](https://quiz-generator-final-ogezczftmyptmugtda93gf.streamlit.app/)
+
+An AI-powered quiz generation tool built with **Python**, **Streamlit**, **Supabase**, and the **Google Gemini API**. 
 
 Upload any document (PDF, DOCX, TXT, MD, etc.), and this application will instantly analyze the text and generate a structured, interactive quiz based on the content. It supports multiple difficulty levels and question types.
 
